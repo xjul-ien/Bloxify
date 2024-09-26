@@ -6,9 +6,9 @@ const app = express();
 app.use(bodyParser.json());
 
 const spotifyApi = new SpotifyWebApi({
-  clientId: "YOUR_CLIENT_ID",
-  clientSecret: "YOUR_CLIENT_SECRET",
-  redirectUri: "YOUR_REDIRECT_URI"
+  clientId: "011188270465432ba262f8a90502d186",
+  clientSecret: "2015a518fcd24d8b8db74d114ec9ad1a",
+  redirectUri: "https://compute-bloxify-net-callback.xjulien-rodot.workers.dev"
 });
 
 // Refresh access token
