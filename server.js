@@ -1,113 +1,104 @@
-const Express = require("express");
-const BodyParser = require("body-parser");
-const YouTubeMusic = require("youtube-music-node");
-const { FFT } = require("dsp.js");
-const ytdl = require("ytdl-core");
-const fs = require("fs");
-const path = require("path");
-const mm = require("music-metadata");
-const Lame = require("lame");
+const express = require("express");
+const bodyParser = require("body-parser");
+const SpotifyWebApi = require("spotify-web-api-node");
+const fetch = require("node-fetch"); // Ensure to install this package
+const { AudioContext } = require("audio-context");
 
-const app = Express();
-app.use(BodyParser.json());
+const app = express();
+app.use(bodyParser.json());
 
-// Initialize YouTube Music API client
-const youTubeMusic = new YouTubeMusic();
-
-// Endpoint to get music details and download audio
-app.post("/get-audio-data", async (req, res) => {
-    const songTitle = req.body.title;
-
-    try {
-        // 1. Get music details using YouTube Music API
-        const songDetails = await youTubeMusic.search(songTitle, { type: 'song' });
-        const videoId = songDetails.videos[0].id;
-
-        // 2. Download the video as MP3
-        const audioFilePath = path.join(__dirname, `${videoId}.mp3`);
-        const audioStream = ytdl(videoId, { filter: format => format.audioBitrate > 0 });
-        audioStream.pipe(fs.createWriteStream(audioFilePath));
-
-        audioStream.on('end', async () => {
-            // 3. Decode the audio data
-            try {
-                const audioData = await decodeAudioFile(audioFilePath);
-                const frequencies = extractFrequencies(audioData);
-
-                // 4. Send frequencies to Roblox server script
-                res.json({ frequencies });
-            } catch (error) {
-                console.error("Error decoding audio: ", error);
-                res.status(500).json({ error: "Failed to decode audio" });
-            }
-        });
-
-        audioStream.on('error', (error) => {
-            console.error("Error downloading audio: ", error);
-            res.status(500).json({ error: "Failed to download audio" });
-        });
-    } catch (error) {
-        console.error("Error fetching music details: ", error);
-        res.status(500).json({ error: "Failed to fetch music details" });
-    }
+const spotifyApi = new SpotifyWebApi({
+  clientId: "011188270465432ba262f8a90502d186",
+  clientSecret: "2015a518fcd24d8b8db74d114ec9ad1a",
+  redirectUri: "https://compute-bloxify-net-callback.xjulien-rodot.workers.dev",
 });
 
-// Function to decode audio file
-async function decodeAudioFile(filePath) {
-    return new Promise((resolve, reject) => {
-        // Create a readable stream from the MP3 file
-        const readStream = fs.createReadStream(filePath);
-        const decoder = new Lame.Decoder();
+// Set the refresh token
+const refreshToken = "AQBGMqns3fKcvxQA6Vw4tyahrmtSMaj0dUbcm9X9eUdpJTT0K-g6cxVBdSyOc2CRKbQJxnV1oK7c1MXXsIlmVa5-6RtYTos0kSJhJEn2gcctLg7T_ZABblMFvStekFZKa-A";
+spotifyApi.setRefreshToken(refreshToken);
 
-        // Use music-metadata to get audio metadata (for sample rate, etc.)
-        mm.parseFile(filePath).then(metadata => {
-            const sampleRate = metadata.format.sampleRate;
-
-            // Collect decoded samples
-            const samples = [];
-            decoder.on('data', (chunk) => {
-                // Push the decoded samples into an array
-                samples.push(chunk);
-            });
-
-            decoder.on('end', () => {
-                // Concatenate the samples into a single buffer
-                const audioBuffer = Buffer.concat(samples);
-                resolve(audioBuffer);
-            });
-
-            decoder.on('error', (error) => {
-                reject(error);
-            });
-
-            // Pipe the read stream to the decoder
-            readStream.pipe(decoder);
-        }).catch(reject);
-    });
-}
-
-// Function to extract frequencies from raw audio data
-function extractFrequencies(audioData) {
-    const floatArray = new Float32Array(audioData.length / 2);
-    for (let i = 0; i < floatArray.length; i++) {
-        floatArray[i] = audioData.readInt16LE(i * 2) / 32768; // Normalize to -1 to 1
+// Refresh access token
+app.post("/refresh_token", (req, res) => {
+  spotifyApi.refreshAccessToken().then(
+    function (data) {
+      res.json({
+        accessToken: data.body["access_token"],
+      });
+    },
+    function (err) {
+      console.log("Could not refresh access token", err);
+      res.status(500).json({ error: "Failed to refresh token" });
     }
+  );
+});
 
-    // Perform FFT using dsp.js
-    const fft = new FFT(floatArray.length);
-    fft.forward(floatArray);
+// Get currently playing track data and frequencies
+app.get("/currently-playing", async (req, res) => {
+  const accessToken = req.headers["authorization"].split(" ")[1];
+  spotifyApi.setAccessToken(accessToken);
 
-    const magnitudes = fft.spectrum; // This gives us the magnitude of each frequency bin
-    const frequencies = magnitudes.map((mag, index) => {
-        return { frequency: index * (44100 / magnitudes.length), magnitude: mag }; // Adjust this according to your sample rate
-    }).filter(f => f.magnitude > 0);
+  try {
+    const data = await spotifyApi.getMyCurrentPlaybackState();
+    if (data.body && data.body.is_playing) {
+      const audioUrl = data.body.item.preview_url; // Get preview URL
+      const response = await fetch(audioUrl);
+      const arrayBuffer = await response.arrayBuffer();
 
-    frequencies.sort((a, b) => b.magnitude - a.magnitude);
-    return frequencies.slice(0, 10).map(f => f.frequency); // Return the top 10 frequencies
+      // Create an audio context and decode the audio data
+      const audioContext = new AudioContext();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+      // Analyze the audio buffer to extract frequencies
+      const frequencies = getFrequenciesFromAudioBuffer(audioBuffer, audioContext);
+
+      res.json({
+        song: data.body.item,
+        progress: data.body.progress_ms,
+        duration: data.body.item.duration_ms,
+        frequencies,
+      });
+    } else {
+      res.status(204).send(); // No content, nothing is playing
+    }
+  } catch (err) {
+    console.error("Error fetching currently playing track", err);
+    res.status(500).json({ error: "Failed to fetch currently playing track" });
+  }
+});
+
+// Function to get frequencies from an AudioBuffer
+function getFrequenciesFromAudioBuffer(audioBuffer, audioContext) {
+  // Create an AnalyserNode to analyze the audio data
+  const analyser = audioContext.createAnalyser();
+  const source = audioContext.createBufferSource();
+
+  source.buffer = audioBuffer;
+  source.connect(analyser);
+  analyser.connect(audioContext.destination); // Connect to output (speakers)
+
+  analyser.fftSize = 2048; // Set FFT size
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength); // Array to hold frequency data
+
+  // Start the playback
+  source.start();
+
+  // Get frequency data after a short delay
+  source.onended = () => {
+    analyser.getByteFrequencyData(dataArray); // Get the frequency data
+  };
+
+  // Extract frequencies as an array
+  const frequencies = [];
+  for (let i = 0; i < bufferLength; i++) {
+    frequencies.push(dataArray[i]);
+  }
+
+  return frequencies;
 }
 
 // Start the server
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
+  console.log(`Server running on port ${port}`);
 });
