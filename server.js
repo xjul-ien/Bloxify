@@ -1,92 +1,113 @@
 const Express = require("express");
 const BodyParser = require("body-parser");
-const SpotifyWebApi = require("spotify-web-api-node");
-const { FFT } = require("dsp.js"); // Requiring from package.json
+const YouTubeMusic = require("youtube-music-node");
+const { FFT } = require("dsp.js");
+const ytdl = require("ytdl-core");
+const fs = require("fs");
+const path = require("path");
+const mm = require("music-metadata");
+const Lame = require("lame");
 
 const app = Express();
 app.use(BodyParser.json());
 
-const spotifyApi = new SpotifyWebApi({
-  clientId: "011188270465432ba262f8a90502d186",
-  clientSecret: "2015a518fcd24d8b8db74d114ec9ad1a",
-  redirectUri: "https://compute-bloxify-net-callback.xjulien-rodot.workers.dev",
-});
+// Initialize YouTube Music API client
+const youTubeMusic = new YouTubeMusic();
 
-// Set the refresh token
-const refreshToken = "AQBGMqns3fKcvxQA6Vw4tyahrmtSMaj0dUbcm9X9eUdpJTT0K-g6cxVBdSyOc2CRKbQJxnV1oK7c1MXXsIlmVa5-6RtYTos0kSJhJEn2gcctLg7T_ZABblMFvStekFZKa-A";
-spotifyApi.setRefreshToken(refreshToken);
+// Endpoint to get music details and download audio
+app.post("/get-audio-data", async (req, res) => {
+    const songTitle = req.body.title;
 
-// Refresh access token
-app.post("/refresh_token", (req, res) => {
-  spotifyApi.refreshAccessToken().then(
-    function(data) {
-      res.json({
-        accessToken: data.body['access_token'],
-      });
-    },
-    function(err) {
-      console.log("Could not refresh access token", err);
-      res.status(500).json({ error: "Failed to refresh token" });
-    }
-  );
-});
+    try {
+        // 1. Get music details using YouTube Music API
+        const songDetails = await youTubeMusic.search(songTitle, { type: 'song' });
+        const videoId = songDetails.videos[0].id;
 
-// Get currently playing track data
-app.get("/currently-playing", (req, res) => {
-  const accessToken = req.headers['authorization'].split(" ")[1];
-  spotifyApi.setAccessToken(accessToken);
+        // 2. Download the video as MP3
+        const audioFilePath = path.join(__dirname, `${videoId}.mp3`);
+        const audioStream = ytdl(videoId, { filter: format => format.audioBitrate > 0 });
+        audioStream.pipe(fs.createWriteStream(audioFilePath));
 
-  spotifyApi.getMyCurrentPlaybackState().then(
-    function(data) {
-      if (data.body && data.body.is_playing) {
-        res.json({
-          song: data.body.item,
-          progress: data.body.progress_ms,
-          duration: data.body.item.duration_ms,
+        audioStream.on('end', async () => {
+            // 3. Decode the audio data
+            try {
+                const audioData = await decodeAudioFile(audioFilePath);
+                const frequencies = extractFrequencies(audioData);
+
+                // 4. Send frequencies to Roblox server script
+                res.json({ frequencies });
+            } catch (error) {
+                console.error("Error decoding audio: ", error);
+                res.status(500).json({ error: "Failed to decode audio" });
+            }
         });
-      } else {
-        res.status(204).send(); // No content, nothing is playing
-      }
-    },
-    function(err) {
-      console.log("Something went wrong!", err);
-      res.status(500).json({ error: "Failed to fetch currently playing track" });
+
+        audioStream.on('error', (error) => {
+            console.error("Error downloading audio: ", error);
+            res.status(500).json({ error: "Failed to download audio" });
+        });
+    } catch (error) {
+        console.error("Error fetching music details: ", error);
+        res.status(500).json({ error: "Failed to fetch music details" });
     }
-  );
 });
 
-// Function to extract frequencies from audio data
+// Function to decode audio file
+async function decodeAudioFile(filePath) {
+    return new Promise((resolve, reject) => {
+        // Create a readable stream from the MP3 file
+        const readStream = fs.createReadStream(filePath);
+        const decoder = new Lame.Decoder();
+
+        // Use music-metadata to get audio metadata (for sample rate, etc.)
+        mm.parseFile(filePath).then(metadata => {
+            const sampleRate = metadata.format.sampleRate;
+
+            // Collect decoded samples
+            const samples = [];
+            decoder.on('data', (chunk) => {
+                // Push the decoded samples into an array
+                samples.push(chunk);
+            });
+
+            decoder.on('end', () => {
+                // Concatenate the samples into a single buffer
+                const audioBuffer = Buffer.concat(samples);
+                resolve(audioBuffer);
+            });
+
+            decoder.on('error', (error) => {
+                reject(error);
+            });
+
+            // Pipe the read stream to the decoder
+            readStream.pipe(decoder);
+        }).catch(reject);
+    });
+}
+
+// Function to extract frequencies from raw audio data
 function extractFrequencies(audioData) {
-    const floatArray = new Float32Array(audioData.length / 4);
+    const floatArray = new Float32Array(audioData.length / 2);
     for (let i = 0; i < floatArray.length; i++) {
-        floatArray[i] = audioData.readFloatLE(i * 4);
+        floatArray[i] = audioData.readInt16LE(i * 2) / 32768; // Normalize to -1 to 1
     }
 
+    // Perform FFT using dsp.js
     const fft = new FFT(floatArray.length);
     fft.forward(floatArray);
 
-    const magnitudes = fft.spectrum;
+    const magnitudes = fft.spectrum; // This gives us the magnitude of each frequency bin
     const frequencies = magnitudes.map((mag, index) => {
-        return { frequency: index * (44100 / magnitudes.length), magnitude: mag };
+        return { frequency: index * (44100 / magnitudes.length), magnitude: mag }; // Adjust this according to your sample rate
     }).filter(f => f.magnitude > 0);
 
     frequencies.sort((a, b) => b.magnitude - a.magnitude);
-    return frequencies.slice(0, 10).map(f => f.frequency);
+    return frequencies.slice(0, 10).map(f => f.frequency); // Return the top 10 frequencies
 }
-
-// Serve audio data (simulate getting playback data)
-app.get("/audio-data", (req, res) => {
-    const audioData = ... // Your raw audio data to be processed
-    const frequencies = extractFrequencies(audioData);
-    
-    // Example magnitudes (replace with actual magnitude extraction)
-    const magnitudes = frequencies.map(freq => Math.random());
-    
-    res.json({ frequencies, magnitudes });
-});
 
 // Start the server
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+    console.log(`Server running on port ${port}`);
 });
