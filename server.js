@@ -8,17 +8,19 @@ app.use(bodyParser.json());
 const spotifyApi = new SpotifyWebApi({
   clientId: "011188270465432ba262f8a90502d186",
   clientSecret: "2015a518fcd24d8b8db74d114ec9ad1a",
-  redirectUri: "https://compute-bloxify-net-callback.xjulien-rodot.workers.dev"
+  redirectUri: "https://compute-bloxify-net-callback.xjulien-rodot.workers.dev",
 });
+
+// Set the refresh token
+const refreshToken = "AQBGMqns3fKcvxQA6Vw4tyahrmtSMaj0dUbcm9X9eUdpJTT0K-g6cxVBdSyOc2CRKbQJxnV1oK7c1MXXsIlmVa5-6RtYTos0kSJhJEn2gcctLg7T_ZABblMFvStekFZKa-A";
+spotifyApi.setRefreshToken(refreshToken);
 
 // Refresh access token
 app.post("/refresh_token", (req, res) => {
-  const { refreshToken } = req.body;
-  spotifyApi.setRefreshToken(refreshToken);
   spotifyApi.refreshAccessToken().then(
     function(data) {
       res.json({
-        accessToken: data.body['access_token']
+        accessToken: data.body['access_token'],
       });
     },
     function(err) {
@@ -39,7 +41,7 @@ app.get("/currently-playing", (req, res) => {
         res.json({
           song: data.body.item,
           progress: data.body.progress_ms,
-          duration: data.body.item.duration_ms
+          duration: data.body.item.duration_ms,
         });
       } else {
         res.status(204).send(); // No content, nothing is playing
