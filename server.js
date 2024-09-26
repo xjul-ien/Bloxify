@@ -1,7 +1,7 @@
 const Express = require("express");
 const BodyParser = require("body-parser");
 const SpotifyWebApi = require("spotify-web-api-node");
-const { FFT } = require("dsp.js"); // Now requiring from the package.json
+const { FFT } = require("dsp.js"); // Requiring from package.json
 
 const app = Express();
 app.use(BodyParser.json());
@@ -55,45 +55,35 @@ app.get("/currently-playing", (req, res) => {
   );
 });
 
+// Function to extract frequencies from audio data
+function extractFrequencies(audioData) {
+    const floatArray = new Float32Array(audioData.length / 4);
+    for (let i = 0; i < floatArray.length; i++) {
+        floatArray[i] = audioData.readFloatLE(i * 4);
+    }
+
+    const fft = new FFT(floatArray.length);
+    fft.forward(floatArray);
+
+    const magnitudes = fft.spectrum;
+    const frequencies = magnitudes.map((mag, index) => {
+        return { frequency: index * (44100 / magnitudes.length), magnitude: mag };
+    }).filter(f => f.magnitude > 0);
+
+    frequencies.sort((a, b) => b.magnitude - a.magnitude);
+    return frequencies.slice(0, 10).map(f => f.frequency);
+}
+
 // Serve audio data (simulate getting playback data)
 app.get("/audio-data", (req, res) => {
-  // Simulate retrieving and sending audio data as raw PCM data
-  // Example: Generate dummy audio data for frequency extraction
-  const audioBufferLength = 44100; // 1 second of audio at 44100Hz
-  const audioData = Buffer.alloc(audioBufferLength * 4); // 32-bit float
-
-  // Fill the buffer with some example audio data (e.g., a sine wave)
-  for (let i = 0; i < audioBufferLength; i++) {
-    const value = Math.sin((i / audioBufferLength) * Math.PI * 2 * 440); // 440Hz sine wave
-    audioData.writeFloatLE(value, i * 4);
-  }
-
-  // Extract frequencies from the simulated audio data
-  const frequencies = extractFrequencies(audioData);
-
-  res.json({ frequencies });
+    const audioData = ... // Your raw audio data to be processed
+    const frequencies = extractFrequencies(audioData);
+    
+    // Example magnitudes (replace with actual magnitude extraction)
+    const magnitudes = frequencies.map(freq => Math.random());
+    
+    res.json({ frequencies, magnitudes });
 });
-
-// Function to extract frequency data from raw audio data
-function extractFrequencies(audioData) {
-  const floatArray = new Float32Array(audioData.length / 4);
-  for (let i = 0; i < floatArray.length; i++) {
-    floatArray[i] = audioData.readFloatLE(i * 4);
-  }
-
-  // Perform FFT using dsp.js
-  const fft = new FFT(floatArray.length);
-  fft.forward(floatArray);
-
-  // Get magnitudes and corresponding frequencies
-  const magnitudes = fft.spectrum; // This gives us the magnitude of each frequency bin
-  const frequencies = magnitudes.map((mag, index) => {
-    return { frequency: index * (44100 / magnitudes.length), magnitude: mag }; // Adjust this according to your sample rate
-  }).filter(f => f.magnitude > 0);
-
-  frequencies.sort((a, b) => b.magnitude - a.magnitude);
-  return frequencies.slice(0, 10).map(f => f.frequency); // Return the top 10 frequencies
-}
 
 // Start the server
 const port = process.env.PORT || 3000;
