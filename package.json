@@ -10,6 +10,7 @@
   "dependencies": {
     "express": "^4.18.2",
     "node-fetch": "^2.6.1",
+    "audio-context": "^1.0.0",
     "spotify-web-api-node": "^5.0.2"
   },
   "keywords": [],
